@@ -34,6 +34,27 @@
 
 #include <osmocom/ranap/RANAP_LAI.h>
 
+/* AF_X25 is Linux only; Darwin names the same family AF_CCITT. The tests
+ * below only need an address family that ranap_new_transp_info_rtp() and
+ * ranap_new_transp_info_gtp() reject. */
+#ifndef AF_X25
+#define AF_X25 AF_CCITT
+#endif
+
+/* The numeric value of AF_INET6 differs between platforms (10 on Linux, 30
+ * on Darwin), so print the family by name. */
+static const char *af_name(int af)
+{
+	switch (af) {
+	case AF_INET:
+		return "AF_INET";
+	case AF_INET6:
+		return "AF_INET6";
+	default:
+		return "unknown";
+	}
+}
+
 extern void *talloc_asn1_ctx;
 
 /* use odd number of digits */
@@ -377,7 +398,7 @@ void test_ranap_transp_layer_addr_decode2(void)
 	OSMO_ASSERT(rc == 0);
 	memset(&sockaddr_str, 0, sizeof(sockaddr_str));
 	osmo_sockaddr_str_from_sockaddr_in(&sockaddr_str, &addr.u.sin);
-	printf("  addr=%s, af=%d, x213_nsap=%u\n", sockaddr_str.ip, sockaddr_str.af, uses_x213_nsap);
+	printf("  addr=%s, af=%s, x213_nsap=%u\n", sockaddr_str.ip, af_name(sockaddr_str.af), uses_x213_nsap);
 
 	printf(" ipv4\n");
 	trasp_layer_addr.buf = encoded_ipv4_addr;
@@ -386,7 +407,7 @@ void test_ranap_transp_layer_addr_decode2(void)
 	OSMO_ASSERT(rc == 0);
 	memset(&sockaddr_str, 0, sizeof(sockaddr_str));
 	osmo_sockaddr_str_from_sockaddr_in(&sockaddr_str, &addr.u.sin);
-	printf("  addr=%s, af=%d, x213_nsap=%u\n", sockaddr_str.ip, sockaddr_str.af, uses_x213_nsap);
+	printf("  addr=%s, af=%s, x213_nsap=%u\n", sockaddr_str.ip, af_name(sockaddr_str.af), uses_x213_nsap);
 
 	printf(" ipv6, x213_nsap\n");
 	trasp_layer_addr.buf = encoded_ipv6_addr_x213_nsap;
@@ -395,7 +416,7 @@ void test_ranap_transp_layer_addr_decode2(void)
 	OSMO_ASSERT(rc == 0);
 	memset(&sockaddr_str, 0, sizeof(sockaddr_str));
 	osmo_sockaddr_str_from_sockaddr_in6(&sockaddr_str, &addr.u.sin6);
-	printf("  addr=%s, af=%d, x213_nsap=%u\n", sockaddr_str.ip, sockaddr_str.af, uses_x213_nsap);
+	printf("  addr=%s, af=%s, x213_nsap=%u\n", sockaddr_str.ip, af_name(sockaddr_str.af), uses_x213_nsap);
 
 	printf(" ipv6\n");
 	trasp_layer_addr.buf = encoded_ipv6_addr;
@@ -404,7 +425,7 @@ void test_ranap_transp_layer_addr_decode2(void)
 	OSMO_ASSERT(rc == 0);
 	memset(&sockaddr_str, 0, sizeof(sockaddr_str));
 	osmo_sockaddr_str_from_sockaddr_in6(&sockaddr_str, &addr.u.sin6);
-	printf("  addr=%s, af=%d, x213_nsap=%u\n", sockaddr_str.ip, sockaddr_str.af, uses_x213_nsap);
+	printf("  addr=%s, af=%s, x213_nsap=%u\n", sockaddr_str.ip, af_name(sockaddr_str.af), uses_x213_nsap);
 }
 
 int main(int argc, char **argv)
