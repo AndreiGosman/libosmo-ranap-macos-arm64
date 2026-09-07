@@ -5,6 +5,7 @@
 *.so
 *~
 .*
+!.tarball-version
 autom4te.cache
 aclocal.m4
 config.guess
