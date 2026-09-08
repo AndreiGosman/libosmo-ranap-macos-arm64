@@ -77,6 +77,8 @@ struct hnb_test {
 	} cs;
 	struct {
 		struct hnbtest_chan *chan;
+		int attached;		/*!< GMM Attach Complete sent */
+		uint32_t ptmsi;		/*!< P-TMSI from the Attach Accept */
 	} ps;
 	/*! channel the RANAP/NAS message being handled arrived on, set by the
 	 *  RUA layer from the CN domain indicator of the DirectTransfer */

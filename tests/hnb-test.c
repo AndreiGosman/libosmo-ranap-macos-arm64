@@ -254,7 +254,7 @@ static struct msgb *gen_nas_auth_resp(struct hnb_test *hnb, const uint8_t *res, 
 	return ranap_new_msg_dt(0, buf, len);
 }
 
-static int hnb_test_tx_dt(struct hnb_test *hnb, struct msgb *txm)
+int hnb_test_tx_dt(struct hnb_test *hnb, struct msgb *txm)
 {
 	struct hnbtest_chan *chan;
 	struct msgb *rua;
@@ -535,6 +535,11 @@ void hnb_test_nas_rx_dtap(struct hnb_test *hnb, void *data, int len)
 		rc = hnb_test_nas_rx_mm(hnb, gh, len);
 		if (rc != 0)
 			printf("Error receiving MM message: %d\n", rc);
+		return;
+	case GSM48_PDISC_MM_GPRS:
+		rc = hnb_test_nas_rx_gmm(hnb, gh, len);
+		if (rc != 0)
+			printf("Error receiving GMM message: %d\n", rc);
 		return;
 	default:
 		printf("04.08 discriminator not handled by hnb-test: %d\n",
@@ -926,6 +931,20 @@ static struct cmd_node chan_node = {
 };
 
 
+/* RANAP InitialUE-Message on a new signalling connection, with the identity
+ * of this test RNC (PLMN 901-99, RNC-ID 23) and the given NAS PDU */
+static struct msgb *gen_initue(int is_ps, uint32_t conn_id, const uint8_t *nas, int nas_len)
+{
+	uint8_t plmn_id[] = { 0x09, 0x01, 0x99 };
+	RANAP_GlobalRNC_ID_t rnc_id = {
+		.rNC_ID = 23,
+		.pLMNidentity.buf = plmn_id,
+		.pLMNidentity.size = sizeof(plmn_id),
+	};
+
+	return ranap_new_msg_initial_ue(conn_id, is_ps, &rnc_id, nas, nas_len);
+}
+
 static struct msgb *gen_initue_lu(int is_ps, uint32_t conn_id, const char *imsi)
 {
 	uint8_t lu[] = { GSM48_PDISC_MM, GSM48_MT_MM_LOC_UPD_REQUEST,
@@ -995,6 +1014,52 @@ DEFUN(chan, chan_cmd,
 	return CMD_SUCCESS;
 }
 
+static uint16_t next_conn_id = 1000;
+
+DEFUN(chan_ps_attach, chan_ps_attach_cmd,
+	"channel ps attach imsi IMSI",
+	"Open a new Signalling Connection\n"
+	"To Packet-Switched CN\n"
+	"Performing a GPRS Attach\n"
+	"Identify the subscriber by IMSI\n"
+	"IMSI of the subscriber\n")
+{
+	struct hnbtest_chan *chan;
+	struct msgb *msg, *rua;
+	uint8_t nas[128];
+	int nas_len;
+
+	if (g_hnb_test.ps.chan) {
+		vty_out(vty, "%% A PS signalling connection is already open (context %u)%s",
+			g_hnb_test.ps.chan->conn_id, VTY_NEWLINE);
+		return CMD_WARNING;
+	}
+
+	chan = talloc_zero(tall_hnb_ctx, struct hnbtest_chan);
+	chan->is_ps = 1;
+	chan->imsi = talloc_strdup(chan, argv[0]);
+	chan->conn_id = next_conn_id++;
+	chan->n_sd = 1;
+
+	nas_len = hnb_test_gen_gmm_attach_req(nas, sizeof(nas), chan->imsi);
+	if (nas_len < 0) {
+		vty_out(vty, "%% Cannot build the Attach Request: %d%s", nas_len, VTY_NEWLINE);
+		talloc_free(chan);
+		return CMD_WARNING;
+	}
+
+	g_hnb_test.ps.chan = chan;
+	g_hnb_test.ps.attached = 0;
+
+	msg = gen_initue(1, chan->conn_id, nas, nas_len);
+	rua = rua_new_conn(1, chan->conn_id, msg);
+	osmo_wqueue_enqueue(&g_hnb_test.wqueue, rua);
+
+	vty_out(vty, "Sent GMM Attach Request for IMSI %s on PS context %u%s",
+		chan->imsi, chan->conn_id, VTY_NEWLINE);
+	return CMD_SUCCESS;
+}
+
 static void hnbtest_vty_init(void)
 {
 	install_element_ve(&asn_dbg_cmd);
@@ -1003,6 +1068,7 @@ static void hnbtest_vty_init(void)
 	install_element_ve(&ue_register_cmd);
 	install_element_ve(&ranap_reset_cmd);
 	install_element_ve(&chan_cmd);
+	install_element_ve(&chan_ps_attach_cmd);
 
 	install_node(&chan_node, NULL);
 }
