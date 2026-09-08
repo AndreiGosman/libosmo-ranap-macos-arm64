@@ -34,3 +34,10 @@ void hnb_test_for_each_ie(const uint8_t *p, int len, const struct hnb_test_tv_le
 			  void (*cb)(uint8_t iei, const uint8_t *val, uint8_t vlen, void *priv), void *priv);
 int hnb_test_gen_gmm_attach_req(uint8_t *buf, size_t size, const char *imsi);
 int hnb_test_nas_rx_gmm(struct hnb_test *hnb, struct gsm48_hdr *gh, int len);
+int hnb_test_gen_gmm_service_req(uint8_t *buf, size_t size, uint32_t ptmsi);
+int hnb_test_nas_rx_gmm_service(struct hnb_test *hnb, struct gsm48_hdr *gh, int len, uint8_t msg_type);
+int hnb_test_tx_sm_act_pdp_req(struct hnb_test *hnb, const char *apn);
+int hnb_test_nas_rx_sm(struct hnb_test *hnb, struct gsm48_hdr *gh, int len);
+
+/* hnb-test-ranap.c */
+void hnb_test_rx_rab_assign_req(struct hnb_test *hnb, void *ies);

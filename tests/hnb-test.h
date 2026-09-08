@@ -79,6 +79,8 @@ struct hnb_test {
 		struct hnbtest_chan *chan;
 		int attached;		/*!< GMM Attach Complete sent */
 		uint32_t ptmsi;		/*!< P-TMSI from the Attach Accept */
+		char *pending_apn;	/*!< APN to activate once the Service Request is accepted */
+		uint8_t nsapi;		/*!< NSAPI of the PDP context being activated */
 	} ps;
 	/*! channel the RANAP/NAS message being handled arrived on, set by the
 	 *  RUA layer from the CN domain indicator of the DirectTransfer */

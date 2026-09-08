@@ -541,6 +541,11 @@ void hnb_test_nas_rx_dtap(struct hnb_test *hnb, void *data, int len)
 		if (rc != 0)
 			printf("Error receiving GMM message: %d\n", rc);
 		return;
+	case GSM48_PDISC_SM_GPRS:
+		rc = hnb_test_nas_rx_sm(hnb, gh, len);
+		if (rc != 0)
+			printf("Error receiving SM message: %d\n", rc);
+		return;
 	default:
 		printf("04.08 discriminator not handled by hnb-test: %d\n",
 		       pdisc);
@@ -1060,6 +1065,66 @@ DEFUN(chan_ps_attach, chan_ps_attach_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFUN(chan_ps_pdp_activate, chan_ps_pdp_activate_cmd,
+	"channel ps pdp-activate imsi IMSI apn APN",
+	"Open a new Signalling Connection\n"
+	"To Packet-Switched CN\n"
+	"Activate a PDP context (Service Request first if the connection is closed)\n"
+	"Identify the subscriber by IMSI\n"
+	"IMSI of the subscriber\n"
+	"Access Point Name\n"
+	"APN to activate, e.g. internet\n")
+{
+	struct hnbtest_chan *chan;
+	struct msgb *msg, *rua;
+	uint8_t nas[64];
+	int nas_len, rc;
+
+	if (!g_hnb_test.ps.attached) {
+		vty_out(vty, "%% Not GPRS attached yet, run 'channel ps attach imsi IMSI' first%s", VTY_NEWLINE);
+		return CMD_WARNING;
+	}
+
+	/* Connection still open (the SGSN did not release it yet): send the SM request now */
+	if (g_hnb_test.ps.chan) {
+		rc = hnb_test_tx_sm_act_pdp_req(&g_hnb_test, argv[1]);
+		if (rc < 0) {
+			vty_out(vty, "%% Cannot send the Activate PDP Context Request: %d%s", rc, VTY_NEWLINE);
+			return CMD_WARNING;
+		}
+		vty_out(vty, "Sent SM Activate PDP Context Request for APN %s on PS context %u%s",
+			argv[1], g_hnb_test.ps.chan->conn_id, VTY_NEWLINE);
+		return CMD_SUCCESS;
+	}
+
+	/* PMM-IDLE: reopen the connection with a Service Request, the SM
+	 * request follows on the Service Accept */
+	chan = talloc_zero(tall_hnb_ctx, struct hnbtest_chan);
+	chan->is_ps = 1;
+	chan->imsi = talloc_strdup(chan, argv[0]);
+	chan->conn_id = next_conn_id++;
+	chan->n_sd = 1;
+
+	nas_len = hnb_test_gen_gmm_service_req(nas, sizeof(nas), g_hnb_test.ps.ptmsi);
+	if (nas_len < 0) {
+		vty_out(vty, "%% Cannot build the Service Request: %d%s", nas_len, VTY_NEWLINE);
+		talloc_free(chan);
+		return CMD_WARNING;
+	}
+
+	g_hnb_test.ps.chan = chan;
+	talloc_free(g_hnb_test.ps.pending_apn);
+	g_hnb_test.ps.pending_apn = talloc_strdup(tall_hnb_ctx, argv[1]);
+
+	msg = gen_initue(1, chan->conn_id, nas, nas_len);
+	rua = rua_new_conn(1, chan->conn_id, msg);
+	osmo_wqueue_enqueue(&g_hnb_test.wqueue, rua);
+
+	vty_out(vty, "Sent GMM Service Request with P-TMSI 0x%08x on PS context %u, APN %s follows on Service Accept%s",
+		g_hnb_test.ps.ptmsi, chan->conn_id, argv[1], VTY_NEWLINE);
+	return CMD_SUCCESS;
+}
+
 static void hnbtest_vty_init(void)
 {
 	install_element_ve(&asn_dbg_cmd);
@@ -1069,6 +1134,7 @@ static void hnbtest_vty_init(void)
 	install_element_ve(&ranap_reset_cmd);
 	install_element_ve(&chan_cmd);
 	install_element_ve(&chan_ps_attach_cmd);
+	install_element_ve(&chan_ps_pdp_activate_cmd);
 
 	install_node(&chan_node, NULL);
 }
