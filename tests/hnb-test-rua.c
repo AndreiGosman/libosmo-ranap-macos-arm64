@@ -2,6 +2,7 @@
 #include <asn1c/ANY.h>
 #include <osmocom/core/talloc.h>
 #include <osmocom/ranap/ranap_common_cn.h>
+#include <osmocom/ranap/ranap_common_ran.h>
 #include <osmocom/rua/rua_ies_defs.h>
 
 #include "hnb-test.h"
@@ -25,7 +26,14 @@ void hnb_test_rua_dt_handle(struct hnb_test *hnb, ANY_t *in)
 	else
 		hnb->cur_chan = hnb->cs.chan;
 
-	rc = ranap_cn_rx_co(hnb_test_rua_dt_handle_ranap, hnb, ies.ranaP_Message.buf, ies.ranaP_Message.size);
+	/* hnb-test is the RAN side of Iu: decode the connection oriented
+	 * messages the CN sends to an RNC (RAB Assignment, Security Mode
+	 * Command, Common ID, Iu Release Command, Direct Transfer). The
+	 * CN-side decoder used before knows only what a CN receives and
+	 * dropped RAB Assignment as "Decode not implemented". There is no
+	 * RAN-side connectionless decoder in libosmo-ranap, so the
+	 * connectionless path keeps the CN-side one. */
+	rc = ranap_ran_rx_co(hnb_test_rua_dt_handle_ranap, hnb, ies.ranaP_Message.buf, ies.ranaP_Message.size);
 
 	hnb->cur_chan = NULL;
 
