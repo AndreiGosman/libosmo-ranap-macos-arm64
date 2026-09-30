@@ -11,8 +11,9 @@ that library is what osmo-msc and osmo-sgsn link when built with
 `--enable-iu`. osmo-hnbgw, the daemon that used to live in this tree,
 is a separate upstream repository since 1.5 and is not ported here.
 
-Upstream version: 1.8.1. Three patches applied, two in the build
-system and one in the testsuite; no library source file is changed.
+Upstream version: 1.8.1. Four patches applied: two in the build
+system, one in the testsuite, and one functional fix in the Iu client
+(`src/iu_client.c`), the only library source file changed.
 Testsuite on macOS 26.6.2, Apple M5 Pro: 3 of 3 pass (helpers, hnbap,
 ranap).
 
@@ -64,22 +65,34 @@ sabp,iuh}/`, 601 headers under `ranap/`. After patch 002,
 | 001 | `src/Makefile.am` | The `gen_*.stamp` rules post-process the asn1tostruct.py output with `sed -i 'script' files`; BSD sed takes the argument after `-i` as a backup suffix and the build stops in `src/` before any object is compiled | Loop over the files and write each substitution through a temporary file; same result with GNU sed |
 | 002 | `src/Makefile.am`, `libosmo-{hnbap,rua,sabp}.pc.in` | The three libraries use `asn1_xer_print` and `talloc_asn1_ctx`, defined in `iu_helpers.c` of libosmo-ranap; GNU ld leaves the reference unresolved despite `-no-undefined`, ld64 refuses to link | Add `libosmo-ranap.la` to their `LIBADD` and `Requires: libosmo-ranap` to their pkg-config files; libosmo-ranap references none of their symbols, so there is no cycle |
 | 003 | `tests/test-helpers.c`, `tests/test-helpers.ok` | `AF_X25` does not exist on Darwin (the family is `AF_CCITT`), and the expected output hard-codes `AF_INET6` as 10 where Darwin has 30 | Define `AF_X25` as `AF_CCITT` when missing; print the address family by name and update the expected output |
+| 004 | `src/iu_client.c`, `include/osmocom/ranap/iu_client.h` | `ranap_handle_co_rab_ass_resp()` only reads the SetupOrModifiedList of a RAB Assignment Response. When the RNC answers with a FailedList (for example cause `user-plane-versions-not-supported`), the response is dropped with rc -1 and the upper layer is never told (`/* FIXME: handle RAB Ass failure? */`); osmo-sgsn then keeps the PDP context in the activation state and the MS never gets an answer to its Activate PDP Context Request | Decode the first FailedList item, log RAB ID and cause, and submit the new event `RANAP_IU_EVENT_RAB_ASSIGN_FAIL` with a `RANAP_RAB_FailedItemIEs_t` as data. The enum value is appended, so existing callers keep their numbering and fall into their default case until they handle it |
 
 A fourth commit tracks `.tarball-version` with the upstream version so
 that `pkg-config --modversion libosmo-ranap` reports 1.8.1 rather than
 the fork's tag. osmo-msc 1.16.0 requires exactly `libosmo-ranap >=
 1.8.1`, so this matters for its `--enable-iu` configure.
 
-All three patches have no effect on GNU/Linux beyond an explicit
-`DT_NEEDED` entry from patch 002, and are worth sending upstream. The
+Patches 001 to 003 have no effect on GNU/Linux beyond an explicit
+`DT_NEEDED` entry from patch 002, and are worth sending upstream.
+
+Patch 004 is not a port fix at all: the missing FailedList handling
+is the same on every platform. It was found while running an extended
+`hnb-test` as a test RNC against osmo-hnbgw and osmo-sgsn, and it
+applies cleanly on osmo-iuh upstream master (8271c81, checked with
+`git apply --check` on 30 September 2026). The consumer side is
+osmo-sgsn patch 005 in
+[osmo-sgsn-macos-arm64](https://github.com/AndreiGosman/osmo-sgsn-macos-arm64)
+v0.1.1, which turns the event into an Activate PDP Context Reject and a
+Delete PDP Context towards the GGSN. Both are candidates for an
+upstream report as one change set. The
 `regen` targets in `src/*/Makefile.am` still use `sed -i` in the GNU
 form; they are only run to regenerate the tree from ASN.1 sources with
 asn1c installed and were left alone.
 
-What needed no patch: the RANAP, HNBAP, RUA and SABP codecs
+What needed no port patch: the RANAP, HNBAP, RUA and SABP codecs
 (asn1c-generated C on the libasn1c runtime), the Iu client in
-`iu_client.c` (SCCP through the libosmo-sigtran port), and the VTY
-node. None of the GNU-isms found in earlier ports of this series
+`iu_client.c` (SCCP through the libosmo-sigtran port; patch 004 is a
+functional fix, not a portability one), and the VTY node. None of the GNU-isms found in earlier ports of this series
 (errno aliases, `sched_setscheduler`, `SOCK_SEQPACKET`, timerfd
 semantics, `-lrt`, `gethostbyname_r`) appear in this tree. The 76
 `-Wparentheses-equality` warnings come from the generated ASN.1 code
@@ -90,8 +103,12 @@ and show with clang on any host.
 No RNC, Home NodeB or HNB-GW was connected, so RANAP over a live Iu
 link was not exercised; the testsuite covers encoding and decoding of
 RANAP and HNBAP messages and the transport-layer helpers. `hnb-test`
-builds as part of `make check` and was not run against a peer.
-osmo-hnbgw and osmo-sgsn are not ported.
+builds as part of `make check`. An extended `hnb-test` (GMM attach,
+PDP context activation, and a GTP-U user plane in Iu UP transparent
+mode, TS 25.415 4.2.2) was later run on one host against the
+osmo-hnbgw, osmo-sgsn and osmo-ggsn ports of this series up to an ICMP
+round trip through the GGSN tunnel; that extension is not published in
+this repository yet, only patch 004 that it uncovered.
 
 ## Dependency cascade
 
@@ -124,8 +141,9 @@ Ports enabled by this repository:
 
 As upstream, per `debian/copyright`: AGPL-3.0-or-later for the tree,
 GPL-2.0 for the Eurecom-derived RUA encoder and decoder templates
-under `asn1/rua/eurecom/`. The patches in this repository touch the
-build system and the testsuite and carry the same license.
+under `asn1/rua/eurecom/`. Patches 001 to 003 touch the build system
+and the testsuite, patch 004 the library source; all carry the same
+license.
 
 ## Credits
 
