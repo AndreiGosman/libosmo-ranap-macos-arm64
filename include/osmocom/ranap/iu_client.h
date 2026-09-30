@@ -52,6 +52,7 @@ enum ranap_iu_event_type {
 	RANAP_IU_EVENT_IU_RELEASE, /* An actual Iu Release message was received */
 	RANAP_IU_EVENT_LINK_INVALIDATED, /* A SUA link was lost or closed down */
 	RANAP_IU_EVENT_NEW_AREA, /* Either a new LAC/RAC has been detected */
+	RANAP_IU_EVENT_RAB_ASSIGN_FAIL, /* The RNC reported a RAB as failed; data is a RANAP_RAB_FailedItemIEs_t */
 };
 
 extern const struct value_string ranap_iu_event_type_names[];

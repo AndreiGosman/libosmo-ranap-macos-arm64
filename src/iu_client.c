@@ -108,6 +108,7 @@ const struct value_string ranap_iu_event_type_names[] = {
 	OSMO_VALUE_STRING(RANAP_IU_EVENT_IU_RELEASE),
 	OSMO_VALUE_STRING(RANAP_IU_EVENT_LINK_INVALIDATED),
 	OSMO_VALUE_STRING(RANAP_IU_EVENT_NEW_AREA),
+	OSMO_VALUE_STRING(RANAP_IU_EVENT_RAB_ASSIGN_FAIL),
 	{ 0, NULL }
 };
 
@@ -655,7 +656,26 @@ static int ranap_handle_co_rab_ass_resp(struct ranap_ue_conn_ctx *ctx, RANAP_RAB
 
 		ranap_free_rab_setupormodifieditemies(&setup_ies);
 	}
-	/* FIXME: handle RAB Ass failure? */
+	if ((ies->presenceMask & RAB_ASSIGNMENTRESPONSEIES_RANAP_RAB_FAILEDLIST_PRESENT) &&
+	    ies->raB_FailedList.raB_FailedList_ies.list.count > 0) {
+		/* TODO: Iterate over list of FailedList IEs and handle each one */
+		RANAP_IE_t *ranap_ie = ies->raB_FailedList.raB_FailedList_ies.list.array[0];
+		RANAP_RAB_FailedItemIEs_t failed_ies;
+
+		rc = ranap_decode_rab_faileditemies_fromlist(&failed_ies, &ranap_ie->value);
+		if (rc) {
+			LOGPIU(LOGL_ERROR, "Error in ranap_decode_rab_faileditemies_fromlist()\n");
+			return rc;
+		}
+
+		LOGPIU(LOGL_NOTICE, "RAB Assignment Response: RAB ID %u failed, cause %s\n",
+		       failed_ies.raB_FailedItem.rAB_ID.size ? failed_ies.raB_FailedItem.rAB_ID.buf[0] : 0,
+		       ranap_cause_str(&failed_ies.raB_FailedItem.cause));
+
+		rc = global_iu_event(ctx, RANAP_IU_EVENT_RAB_ASSIGN_FAIL, &failed_ies);
+
+		ranap_free_rab_faileditemies(&failed_ies);
+	}
 
 	return rc;
 }
