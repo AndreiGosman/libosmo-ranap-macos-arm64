@@ -51,6 +51,7 @@ struct hnbtest_chan {
 struct hnb_test {
 	const char *gw_addr;
 	uint16_t gw_port;
+	const char *gtpu_addr;	/*!< local address for the Iu-PS GTP-U socket (-G) */
 	/*! SCTP listen socket for incoming connections */
 	struct osmo_fd conn_fd;
 
@@ -81,6 +82,15 @@ struct hnb_test {
 		uint32_t ptmsi;		/*!< P-TMSI from the Attach Accept */
 		char *pending_apn;	/*!< APN to activate once the Service Request is accepted */
 		uint8_t nsapi;		/*!< NSAPI of the PDP context being activated */
+		uint32_t pdp_addr;	/*!< IPv4 PDP address from the Activate PDP Context Accept, host order */
+		/* Iu-PS user plane: GTP-U direct tunnel to the GGSN (osmo-sgsn uses Direct Tunnel) */
+		struct osmo_fd gtpu_fd;	/*!< our GTP-U socket, bound on gtpu_addr:2152 */
+		bool gtpu_open;
+		bool rab_up;		/*!< RAB Assignment answered with a SetupOrModifiedList */
+		uint32_t teid_local;	/*!< TEID the GGSN uses for downlink T-PDUs to us */
+		uint32_t teid_remote;	/*!< GGSN TEID from the RAB Assignment Request */
+		uint32_t gtpu_remote;	/*!< GGSN GTP-U address from the RAB Assignment Request, network order */
+		uint16_t icmp_seq;
 	} ps;
 	/*! channel the RANAP/NAS message being handled arrived on, set by the
 	 *  RUA layer from the CN domain indicator of the DirectTransfer */

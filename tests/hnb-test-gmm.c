@@ -25,6 +25,7 @@
 
 #include <osmocom/core/msgb.h>
 #include <osmocom/core/utils.h>
+#include <osmocom/core/bit32gen.h>
 #include <osmocom/core/talloc.h>
 #include <osmocom/gsm/gsm48.h>
 #include <osmocom/gsm/apn.h>
@@ -506,10 +507,13 @@ static void act_pdp_acc_ie(uint8_t iei, const uint8_t *val, uint8_t vlen, void *
 	switch (iei) {
 	case GSM48_IE_GSM_PDP_ADDR:
 		/* octet 1: PDP type organisation, octet 2: PDP type number, then the address */
-		if (vlen >= 6 && (val[0] & 0x0f) == 1 && val[1] == 0x21)
+		if (vlen >= 6 && (val[0] & 0x0f) == 1 && val[1] == 0x21) {
+			struct hnb_test *hnb = priv;
+
+			hnb->ps.pdp_addr = osmo_load32be(val + 2);
 			printf("PDP context activated, IPv4 address %u.%u.%u.%u\n",
 			       val[2], val[3], val[4], val[5]);
-		else
+		} else
 			printf("PDP context activated, PDP address %s\n", osmo_hexdump_nospc(val, vlen));
 		break;
 	case GSM48_IE_GSM_PROTO_CONF_OPT:

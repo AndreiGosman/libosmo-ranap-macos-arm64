@@ -73,6 +73,7 @@ static void *tall_hnb_ctx;
 
 struct hnb_test g_hnb_test = {
 	.gw_addr = "127.0.0.1",
+	.gtpu_addr = "127.0.0.12",
 	.gw_port = IUH_DEFAULT_SCTP_PORT,
 };
 
@@ -1125,6 +1126,29 @@ DEFUN(chan_ps_pdp_activate, chan_ps_pdp_activate_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFUN(chan_ps_ping, chan_ps_ping_cmd,
+	"channel ps ping A.B.C.D",
+	"Open a new Signalling Connection\n"
+	"To Packet-Switched CN\n"
+	"Send one ICMP echo request from the PDP address over the Iu-PS RAB (GTP-U to the GGSN)\n"
+	"IPv4 destination, e.g. the GGSN tun address\n")
+{
+	int rc;
+
+	if (!g_hnb_test.ps.rab_up) {
+		vty_out(vty, "%% No PS RAB set up yet, run 'channel ps pdp-activate' first%s", VTY_NEWLINE);
+		return CMD_WARNING;
+	}
+	rc = hnb_test_ps_ping(&g_hnb_test, argv[0]);
+	if (rc < 0) {
+		vty_out(vty, "%% ping failed: %s%s", strerror(-rc), VTY_NEWLINE);
+		return CMD_WARNING;
+	}
+	vty_out(vty, "Sent ICMP echo request to %s, seq %u; the reply is printed on stdout%s",
+		argv[0], g_hnb_test.ps.icmp_seq, VTY_NEWLINE);
+	return CMD_SUCCESS;
+}
+
 static void hnbtest_vty_init(void)
 {
 	install_element_ve(&asn_dbg_cmd);
@@ -1135,6 +1159,7 @@ static void hnbtest_vty_init(void)
 	install_element_ve(&chan_cmd);
 	install_element_ve(&chan_ps_attach_cmd);
 	install_element_ve(&chan_ps_pdp_activate_cmd);
+	install_element_ve(&chan_ps_ping_cmd);
 
 	install_node(&chan_node, NULL);
 }
@@ -1146,10 +1171,11 @@ static void handle_options(int argc, char **argv)
 		static const struct option long_options[] = {
 			{ "ues", 1, 0, 'u' },
 			{ "gw-addr", 1, 0, 'g' },
+			{ "gtpu-addr", 1, 0, 'G' },
 			{ 0, 0, 0, 0 },
 		};
 
-		c = getopt_long(argc, argv, "u:g:", long_options, &idx);
+		c = getopt_long(argc, argv, "u:g:G:", long_options, &idx);
 
 		if (c == -1)
 			break;
@@ -1160,6 +1186,9 @@ static void handle_options(int argc, char **argv)
 			break;
 		case 'g':
 			g_hnb_test.gw_addr = optarg;
+			break;
+		case 'G':
+			g_hnb_test.gtpu_addr = optarg;
 			break;
 		}
 	}

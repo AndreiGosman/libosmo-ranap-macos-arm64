@@ -41,3 +41,8 @@ int hnb_test_nas_rx_sm(struct hnb_test *hnb, struct gsm48_hdr *gh, int len);
 
 /* hnb-test-ranap.c */
 void hnb_test_rx_rab_assign_req(struct hnb_test *hnb, void *ies);
+
+/* hnb-test-gtpu.c: Iu-PS user plane, GTP-U direct tunnel to the GGSN */
+int hnb_test_gtpu_open(struct hnb_test *hnb);
+int hnb_test_gtpu_tx_tpdu(struct hnb_test *hnb, const uint8_t *data, unsigned int len);
+int hnb_test_ps_ping(struct hnb_test *hnb, const char *dst);

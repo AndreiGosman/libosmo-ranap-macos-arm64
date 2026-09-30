@@ -1,4 +1,7 @@
+#include <arpa/inet.h>
 #include <osmocom/core/msgb.h>
+#include <osmocom/core/bit32gen.h>
+#include <osmocom/core/socket.h>
 #include <osmocom/ranap/ranap_ies_defs.h>
 #include <osmocom/ranap/iu_helpers.h>
 #include <osmocom/ranap/ranap_common.h>
@@ -66,11 +69,8 @@ void hnb_test_rua_dt_handle_ranap(void *priv, struct ranap_message_s *ranap_msg)
 	}
 }
 
-/* RAB Assignment Response that reports the RAB as failed. This test HNB has
- * no Iu-UP and no GTP-U, so it cannot set up a radio access bearer; answer
- * with "user plane versions not supported" so the SGSN does not wait for
- * the bearer. */
-static struct msgb *gen_rab_assign_fail(uint8_t rab_id)
+/* RAB Assignment Response that reports the RAB as failed with the given cause. */
+static struct msgb *gen_rab_assign_fail(uint8_t rab_id, long cause_rn)
 {
 	RANAP_RAB_AssignmentResponseIEs_t ies;
 	RANAP_RAB_FailedItemIEs_t item;
@@ -87,7 +87,7 @@ static struct msgb *gen_rab_assign_fail(uint8_t rab_id)
 	item.raB_FailedItem.rAB_ID.size = 1;
 	item.raB_FailedItem.rAB_ID.bits_unused = 0;
 	item.raB_FailedItem.cause.present = RANAP_Cause_PR_radioNetwork;
-	item.raB_FailedItem.cause.choice.radioNetwork = RANAP_CauseRadioNetwork_user_plane_versions_not_supported;
+	item.raB_FailedItem.cause.choice.radioNetwork = cause_rn;
 
 	rc = ranap_encode_rab_faileditemies(&ies.raB_FailedList, &item);
 	if (rc < 0) {
@@ -109,11 +109,85 @@ static struct msgb *gen_rab_assign_fail(uint8_t rab_id)
 	return msg;
 }
 
+/* RAB Assignment Response with the RAB set up: our GTP-U address and the
+ * TEID the GGSN shall use for downlink T-PDUs, encoded the way the request
+ * encoded the GGSN side (TS 25.413 9.2.2.1, X.213 NSAP or plain). */
+static struct msgb *gen_rab_assign_setup(uint8_t rab_id, const struct osmo_sockaddr *our_addr,
+					 uint32_t our_teid, bool use_x213_nsap)
+{
+	RANAP_RAB_AssignmentResponseIEs_t ies;
+	RANAP_RAB_SetupOrModifiedItemIEs_t item;
+	RANAP_RAB_AssignmentResponse_t out;
+	RANAP_TransportLayerAddress_t tla;
+	RANAP_IuTransportAssociation_t ita;
+	struct msgb *msg = NULL;
+	uint8_t rab_id_buf = rab_id;
+	uint32_t teid_be = htonl(our_teid);
+	int rc;
+
+	memset(&ies, 0, sizeof(ies));
+	memset(&item, 0, sizeof(item));
+	memset(&out, 0, sizeof(out));
+	memset(&tla, 0, sizeof(tla));
+	memset(&ita, 0, sizeof(ita));
+
+	rc = ranap_new_transp_layer_addr(&tla, our_addr, use_x213_nsap);
+	if (rc < 0) {
+		printf("ranap_new_transp_layer_addr() failed: %d\n", rc);
+		return NULL;
+	}
+	ita.present = RANAP_IuTransportAssociation_PR_gTP_TEI;
+	OCTET_STRING_fromBuf(&ita.choice.gTP_TEI, (const char *) &teid_be, sizeof(teid_be));
+
+	item.raB_SetupOrModifiedItem.rAB_ID.buf = &rab_id_buf;
+	item.raB_SetupOrModifiedItem.rAB_ID.size = 1;
+	item.raB_SetupOrModifiedItem.rAB_ID.bits_unused = 0;
+	item.raB_SetupOrModifiedItem.transportLayerAddress = &tla;
+	item.raB_SetupOrModifiedItem.iuTransportAssociation = &ita;
+
+	rc = ranap_encode_rab_setupormodifieditemies(&ies.raB_SetupOrModifiedList, &item);
+	if (rc < 0) {
+		printf("ranap_encode_rab_setupormodifieditemies() failed: %d\n", rc);
+		goto out;
+	}
+	ies.presenceMask = RAB_ASSIGNMENTRESPONSEIES_RANAP_RAB_SETUPORMODIFIEDLIST_PRESENT;
+
+	rc = ranap_encode_rab_assignmentresponseies(&out, &ies);
+	if (rc < 0) {
+		printf("ranap_encode_rab_assignmentresponseies() failed: %d\n", rc);
+		goto out;
+	}
+
+	msg = ranap_generate_outcome(RANAP_ProcedureCode_id_RAB_Assignment,
+				     RANAP_Criticality_reject,
+				     &asn_DEF_RANAP_RAB_AssignmentResponse, &out);
+	ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_RANAP_RAB_AssignmentResponse, &out);
+out:
+	ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_RANAP_TransportLayerAddress, &tla);
+	ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_RANAP_IuTransportAssociation, &ita);
+	return msg;
+}
+
+/* The SGSN asks for a PS RAB. osmo-sgsn uses Direct Tunnel, so the
+ * transport layer information in the request is the GGSN's GTP-U endpoint,
+ * and Iu UP for PS is transparent mode (TS 25.415 4.2.2): the GTP-U payload
+ * is the IP packet, no Iu UP framing. Anything else (support mode, a
+ * binding ID instead of a GTP TEID) is refused with an honest cause. */
 void hnb_test_rx_rab_assign_req(struct hnb_test *hnb, void *_ies)
 {
 	RANAP_RAB_AssignmentRequestIEs_t *ies = _ies;
+	RANAP_ProtocolIE_ContainerPair_t *container_pair;
+	RANAP_ProtocolIE_FieldPair_t *field_pair;
+	RANAP_RAB_SetupOrModifyItemFirst_t first;
+	RANAP_UserPlaneInformation_t *upi;
+	RANAP_TransportLayerInformation_t *tli;
+	struct osmo_sockaddr ggsn_addr, our_addr;
+	bool use_x213_nsap = false;
 	uint8_t rab_id = hnb->ps.nsapi ? hnb->ps.nsapi : 5;
+	long fail_cause = RANAP_CauseRadioNetwork_user_plane_versions_not_supported;
+	uint8_t mode_versions;
 	struct msgb *msg;
+	int rc;
 
 	printf("rx RAB Assignment Request: presence = %hx, %d RAB(s) to set up or modify, %d to release\n",
 	       ies->presenceMask,
@@ -121,9 +195,99 @@ void hnb_test_rx_rab_assign_req(struct hnb_test *hnb, void *_ies)
 	       ies->raB_SetupOrModifyList.list.count : 0,
 	       (ies->presenceMask & RAB_ASSIGNMENTREQUESTIES_RANAP_RAB_RELEASELIST_PRESENT) ?
 	       ies->raB_ReleaseList.raB_ReleaseList_ies.list.count : 0);
-	printf("Iu-UP is not implemented in hnb-test: answering RAB Assignment Response, RAB %u failed\n", rab_id);
 
-	msg = gen_rab_assign_fail(rab_id);
+	if (!(ies->presenceMask & RAB_ASSIGNMENTREQUESTIES_RANAP_RAB_SETUPORMODIFYLIST_PRESENT) ||
+	    ies->raB_SetupOrModifyList.list.count < 1) {
+		printf("RAB Assignment Request without a SetupOrModifyList: nothing to set up\n");
+		return;
+	}
+
+	/* one RAB per request from osmo-sgsn; look at the first item only */
+	container_pair = ies->raB_SetupOrModifyList.list.array[0];
+	if (container_pair->list.count < 1) {
+		printf("RAB Assignment Request: empty IE container pair\n");
+		goto fail;
+	}
+	field_pair = container_pair->list.array[0];
+	if (field_pair->id != RANAP_ProtocolIE_ID_id_RAB_SetupOrModifyItem) {
+		printf("RAB Assignment Request: IE pair id %ld is not RAB-SetupOrModifyItem\n", field_pair->id);
+		goto fail;
+	}
+
+	memset(&first, 0, sizeof(first));
+	rc = ranap_decode_rab_setupormodifyitemfirst(&first, &field_pair->firstValue);
+	if (rc < 0) {
+		printf("ranap_decode_rab_setupormodifyitemfirst() failed: %d\n", rc);
+		goto fail;
+	}
+	if (first.rAB_ID.size >= 1)
+		rab_id = first.rAB_ID.buf[0];
+
+	upi = first.userPlaneInformation;
+	tli = first.transportLayerInformation;
+	if (!upi || !tli) {
+		printf("RAB %u: request without user plane information or transport layer information\n", rab_id);
+		goto free_fail;
+	}
+	mode_versions = upi->uP_ModeVersions.size >= 1 ? upi->uP_ModeVersions.buf[0] : 0;
+	printf("RAB %u: user plane mode %s, mode versions 0x%02x, transport association %s\n",
+	       rab_id,
+	       upi->userPlaneMode == RANAP_UserPlaneMode_transparent_mode ? "transparent" :
+	       upi->userPlaneMode == RANAP_UserPlaneMode_support_mode_for_predefined_SDU_sizes ? "support" : "unknown",
+	       mode_versions,
+	       tli->iuTransportAssociation.present == RANAP_IuTransportAssociation_PR_gTP_TEI ? "GTP TEI" :
+	       tli->iuTransportAssociation.present == RANAP_IuTransportAssociation_PR_bindingID ? "binding ID" : "none");
+
+	if (upi->userPlaneMode != RANAP_UserPlaneMode_transparent_mode) {
+		printf("RAB %u: only Iu UP transparent mode is implemented here, refusing\n", rab_id);
+		goto free_fail;
+	}
+	if (tli->iuTransportAssociation.present != RANAP_IuTransportAssociation_PR_gTP_TEI ||
+	    tli->iuTransportAssociation.choice.gTP_TEI.size != 4) {
+		printf("RAB %u: transport association is not a 4-byte GTP TEI, refusing\n", rab_id);
+		fail_cause = RANAP_CauseRadioNetwork_invalid_rab_parameters_value;
+		goto free_fail;
+	}
+	rc = ranap_transp_layer_addr_decode2(&ggsn_addr, &use_x213_nsap, &tli->transportLayerAddress);
+	if (rc < 0 || ggsn_addr.u.sa.sa_family != AF_INET) {
+		printf("RAB %u: cannot decode the transport layer address (rc %d), refusing\n", rab_id, rc);
+		fail_cause = RANAP_CauseRadioNetwork_invalid_rab_parameters_value;
+		goto free_fail;
+	}
+
+	hnb->ps.gtpu_remote = ggsn_addr.u.sin.sin_addr.s_addr;
+	hnb->ps.teid_remote = osmo_load32be(tli->iuTransportAssociation.choice.gTP_TEI.buf);
+	printf("RAB %u: GGSN GTP-U endpoint %s TEID 0x%08x (%s encoding)\n", rab_id,
+	       inet_ntoa(ggsn_addr.u.sin.sin_addr), hnb->ps.teid_remote,
+	       use_x213_nsap ? "X.213 NSAP" : "plain");
+
+	if (hnb_test_gtpu_open(hnb) < 0)
+		goto free_fail;
+
+	/* our side: fixed TEID per RAB, distinct from anything the GGSN hands out */
+	hnb->ps.teid_local = 0x48420000 | rab_id;
+	memset(&our_addr, 0, sizeof(our_addr));
+	our_addr.u.sin.sin_family = AF_INET;
+	if (inet_pton(AF_INET, hnb->gtpu_addr, &our_addr.u.sin.sin_addr) != 1) {
+		printf("RAB %u: GTP-U address %s is not IPv4\n", rab_id, hnb->gtpu_addr);
+		goto free_fail;
+	}
+
+	msg = gen_rab_assign_setup(rab_id, &our_addr, hnb->ps.teid_local, use_x213_nsap);
+	ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_RANAP_RAB_SetupOrModifyItemFirst, &first);
+	if (!msg)
+		goto fail;
+	hnb->ps.rab_up = true;
+	printf("RAB %u set up: answering RAB Assignment Response, our GTP-U endpoint %s:2152 TEID 0x%08x\n",
+	       rab_id, hnb->gtpu_addr, hnb->ps.teid_local);
+	hnb_test_tx_dt(hnb, msg);
+	return;
+
+free_fail:
+	ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_RANAP_RAB_SetupOrModifyItemFirst, &first);
+fail:
+	printf("answering RAB Assignment Response, RAB %u failed, cause %ld\n", rab_id, fail_cause);
+	msg = gen_rab_assign_fail(rab_id, fail_cause);
 	if (msg)
 		hnb_test_tx_dt(hnb, msg);
 }
